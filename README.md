@@ -1,3 +1,7 @@
+
+## NHL RAPM Development
+
+
 This repo is has my code concerning the development of a RAPM metric for NHL skaters at even strength. Also included here is the code to train my expected goals (xG) model.  
 
 The code is not a finished product. Before I can train the RAPM models for each season (and I hope to do 3 and 5 year models once I figure out how to make it less computationally expensive) I need 
