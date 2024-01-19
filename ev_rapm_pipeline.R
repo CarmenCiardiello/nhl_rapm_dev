@@ -5,6 +5,7 @@ library(future)
 library(bundle) 
 library(tidymodels)
 library(h2o)
+library(agua)
 
 source("xg_train_automl.R")
 
