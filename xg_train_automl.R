@@ -20,6 +20,18 @@ library(future)
 add_features <- function(pbp_df){
   
   pbp_df <- pbp_df %>% 
+    mutate(secondary_type = case_when(
+      secondary_type == "Wrist Shot" ~ "wrist", 
+      secondary_type == "Slap Shot" ~ "slap", 
+      secondary_type == "Snap Shot" ~ "snap", 
+      secondary_type == "Backhand" ~ "backhand", 
+      secondary_type == "Deflected" ~ "deflected", 
+      secondary_type == "Tip-In" ~ "tip-in", 
+      secondary_type == "Wrap-around" ~ "wrap-around", 
+      secondary_type == "Batted" ~ "bat", 
+      secondary_type == "Poke" ~ "poke", 
+      .default = secondary_type
+    )) %>% 
     mutate(
       strength_state = as.factor(strength_state), 
       strength_code = as.factor(strength_code),
@@ -27,7 +39,7 @@ add_features <- function(pbp_df){
       score_margin = ifelse(event_team_type == "home", home_score - away_score, away_score - home_score), 
       score_margin = as.factor(score_margin),
       total_goals = as.factor(away_score + home_score),
-      is_shot = ifelse(event %in% c("Goal", "Missed Shot", "Blocked Shot", "Shot"), 1, 0),
+      is_shot = ifelse(event_type %in% c("GOAL", "MISSED_SHOT", "BLOCKED_SHOT", "SHOT"), 1, 0),
       is_home = ifelse(event_team_type == "home", 1, 0), 
       event_zone = case_when(
         x >= -25 & x <= 25 ~ "NZ",
@@ -103,7 +115,7 @@ filter_shots <- function(pbp_df){
   # filter pbp data frame for 
   pbp_df <- pbp_df %>% 
     filter(
-      event_type %in% c("GOAL", "MISSED SHOT", "SHOT"), 
+      event_type %in% c("GOAL", "MISSED_SHOT", "SHOT"), 
       period_type != "SHOOTOUT"
     ) 
   
@@ -111,10 +123,9 @@ filter_shots <- function(pbp_df){
   
 }
 
-
 ##################### MODEL TRAINING ###############################
 
-xg_model_train <- function(sample_per_season = 20000){
+xg_model_train <- function(sample_per_season = 40000){
   # add the necessary features to the pbp data
   
   plan(multisession)
@@ -125,7 +136,8 @@ xg_model_train <- function(sample_per_season = 20000){
       add_features() %>% 
       filter_shots() %>% 
       sample_n(sample_per_season)
-    })
+    }) 
+    
   
   plan(NULL)
   
@@ -141,7 +153,7 @@ xg_model_train <- function(sample_per_season = 20000){
         last_event_zone + last_event_team + prev_event + time_since_last + 
         shot_distance + shot_angle + event_dist_delta + is_rebound + is_flurry + 
         out_of_zone + era_2011_2013 + era_2014_2018 + era_2019_2021 + era_2022_on + 
-        behind_net + is_rush + shot_type + empty_net
+        behind_net + is_rush + empty_net + shot_type
     ) %>% 
     step_novel(all_nominal_predictors()) %>% 
     step_other(all_nominal_predictors(), threshold = 0.005) %>% 
@@ -182,12 +194,20 @@ apply_xg_model <- function(pbp_df){
   # first need to split the data for the shot and non shot events, then apply model to shot events
   
   pbp_df <- pbp_df %>% 
-    add_features() %>% 
     filter(period_type != "SHOOTOUT")
+  
+  change_df <- pbp_df %>% 
+    filter(event_type == "CHANGE")
+  
+  pbp_df <- pbp_df %>% 
+    anti_join(change_df) %>% 
+    add_features()
+  
+  change_df <- change_df %>% add_features()
   
   non_shots <- pbp_df %>% 
     filter(
-      event != "Goal", event != "Shot", event != "Missed Shot"
+      event_type != "GOAL", event_type != "SHOT", event_type != "MISSED_SHOT"
       )
   
   # shots are events in pbp data that are not logged in non_shots data frame
@@ -205,14 +225,29 @@ apply_xg_model <- function(pbp_df){
   
   h2o_end()
   
-  shots <- shots %>% 
-    select(-xg) %>% # get rid of native hockeyR xg model
-    bind_cols(goal_probs) %>% 
-    relocate(xg)
+  if("xg" %in% colnames(shots)){
+    
+    shots <- shots %>% 
+      select(-xg) %>% # get rid of native hockeyR xg model
+      bind_cols(goal_probs) %>% 
+      relocate(xg)
+    
+  } else{
+    
+    shots <- shots %>% 
+      bind_cols(goal_probs) %>% 
+      relocate(xg)
+    
+    non_shots <- non_shots %>% 
+      mutate(xg = NA) %>% 
+      relocate(xg)
+    
+  }
   
   # bind the shooting and non-shooting events back together
   df <- shots %>% 
-    bind_rows(non_shots)
+    bind_rows(non_shots) %>% 
+    bind_rows(change_df)
   
   return(df)
   

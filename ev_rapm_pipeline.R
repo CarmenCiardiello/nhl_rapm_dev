@@ -16,18 +16,31 @@ get_pbp_data <- function(season_start = 2023, season_end = 2023){
   pbp_df <- season_start:season_end %>% 
     map_df(~{
       load_pbp(season = ., shift_events = TRUE) %>% 
-        add_features() %>% 
         mutate(game_date = as_date(game_date), 
                game_score_state = paste(home_score, away_score, sep = "v"), 
                event_length = lead(game_seconds) - game_seconds) %>% 
         filter(period_type != "SHOOTOUT")
     })
   
-  # need to apply xg model to data, so have to split data by shots and non-shots and bind them back up
+  # pbp_df is the data from the function load_pbp() in hockeyR package
+  
+  # first need to split the data for the shot and non shot events, then apply model to shot events
+  
+  pbp_df <- pbp_df %>% 
+    filter(period_type != "SHOOTOUT")
+  
+  change_df <- pbp_df %>% 
+    filter(event_type == "CHANGE")
+  
+  pbp_df <- pbp_df %>% 
+    anti_join(change_df) %>% 
+    add_features()
+  
+  change_df <- change_df %>% add_features()
   
   non_shots <- pbp_df %>% 
     filter(
-      event != "Goal", event != "Shot", event != "Missed Shot"
+      event_type != "GOAL", event_type != "SHOT", event_type != "MISSED_SHOT"
     )
   
   # shots are events in pbp data that are not logged in non_shots data frame
@@ -45,14 +58,29 @@ get_pbp_data <- function(season_start = 2023, season_end = 2023){
   
   h2o_end()
   
-  shots <- shots %>% 
-    select(-xg) %>% # get rid of native hockeyR xg model
-    bind_cols(goal_probs) %>% 
-    relocate(xg)
+  if("xg" %in% colnames(shots)){
+    
+    shots <- shots %>% 
+      select(-xg) %>% # get rid of native hockeyR xg model
+      bind_cols(goal_probs) %>% 
+      relocate(xg)
+    
+  } else{
+    
+    shots <- shots %>% 
+      bind_cols(goal_probs) %>% 
+      relocate(xg)
+    
+    non_shots <- non_shots %>% 
+      mutate(xg = NA) %>% 
+      relocate(xg)
+    
+  }
   
   # bind the shooting and non-shooting events back together
   df <- shots %>% 
-    bind_rows(non_shots)
+    bind_rows(non_shots) %>% 
+    bind_rows(change_df)
   
   return(df)
   
@@ -295,10 +323,11 @@ group_shifts <- function(dfev){
   
   ### REMOVE DUMMY VARIABLES THAT WE WILL NOT BE USING ###
   
-  subsetted_shifts <- subset(combined_shifts, 
-                             select = -c(game_id:period, game_score_state, xGF, 
-                                         Tied, State_5v5, Period_1:Period_3, 
-                                         offense_goalie, defense_goalie)
+  subsetted_shifts <- subset(
+    combined_shifts, 
+    select = -c(game_id:period, game_score_state, xGF, 
+               Tied, State_5v5, Period_1:Period_3, 
+               offense_goalie, defense_goalie)
   )
   
   return(subsetted_shifts)
